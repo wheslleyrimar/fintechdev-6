@@ -1,0 +1,80 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.55
+    ports: ["16686:16686", "4317:4317", "14268:14268"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports: ["9090:9090"]
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./observability/grafana/datasources:/etc/grafana/provisioning/datasources
+
+  payment-service:
+    build: ./services/payment
+    ports: ["8080:8080"]
+    environment:
+      - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
+      - JAEGER_ENDPOINT=jaeger:6831
+      # Lag intencional (configurar para simular problemas de latência)
+      - INTENTIONAL_LAG_ENABLED=true
+      - INTENTIONAL_LAG_DATABASE_MS=2000
+      - INTENTIONAL_LAG_CACHE_MS=500
+      - INTENTIONAL_LAG_EXTERNAL_MS=1000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  antifraud-service:
+    build: ./services/antifraud
+    ports: ["8081:8080"]
+    environment:
+      - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
+      - SERVICE_NAME=antifraud
+      - JAEGER_ENDPOINT=jaeger:6831
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  notification-service:
+    build: ./services/notification
+    ports: ["8082:8080"]
+    environment:
+      - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
+      - JAEGER_ENDPOINT=jaeger:6831
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+volumes:
+  grafana_data:
