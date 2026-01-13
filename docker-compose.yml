@@ -41,10 +41,10 @@ services:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
       - JAEGER_ENDPOINT=jaeger:6831
       # Lag intencional (configurar para simular problemas de latência)
-      - INTENTIONAL_LAG_ENABLED=true
-      - INTENTIONAL_LAG_DATABASE_MS=2000
-      - INTENTIONAL_LAG_CACHE_MS=500
-      - INTENTIONAL_LAG_EXTERNAL_MS=1000
+      # - INTENTIONAL_LAG_ENABLED=true
+      # - INTENTIONAL_LAG_DATABASE_MS=2000
+      # - INTENTIONAL_LAG_CACHE_MS=500
+      # - INTENTIONAL_LAG_EXTERNAL_MS=1000
     depends_on:
       rabbitmq:
         condition: service_healthy
