@@ -336,26 +336,49 @@ var (
 		},
 	)
 
-	lagDatabaseDuration = promauto.NewHistogram(
+	// Gauges que mostram os valores configurados do LAG (usados pelo guia)
+	lagDatabaseDurationConfig = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "intentional_lag_database_duration_seconds",
+			Help: "Configured duration of intentional database lag in seconds",
+		},
+	)
+
+	lagCacheDurationConfig = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "intentional_lag_cache_duration_seconds",
+			Help: "Configured duration of intentional cache lag in seconds",
+		},
+	)
+
+	lagExternalDurationConfig = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "intentional_lag_external_duration_seconds",
+			Help: "Configured duration of intentional external call lag in seconds",
+		},
+	)
+
+	// Histograms que observam os delays reais aplicados (para análise estatística)
+	lagDatabaseDurationObserved = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "intentional_lag_database_duration_seconds",
-			Help:    "Duration of intentional database lag",
+			Name:    "intentional_lag_database_duration_seconds_observed",
+			Help:    "Observed duration of intentional database lag (histogram)",
 			Buckets: []float64{0.1, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0},
 		},
 	)
 
-	lagCacheDuration = promauto.NewHistogram(
+	lagCacheDurationObserved = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "intentional_lag_cache_duration_seconds",
-			Help:    "Duration of intentional cache lag",
+			Name:    "intentional_lag_cache_duration_seconds_observed",
+			Help:    "Observed duration of intentional cache lag (histogram)",
 			Buckets: []float64{0.1, 0.25, 0.5, 1.0, 2.0, 5.0},
 		},
 	)
 
-	lagExternalDuration = promauto.NewHistogram(
+	lagExternalDurationObserved = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "intentional_lag_external_duration_seconds",
-			Help:    "Duration of intentional external call lag",
+			Name:    "intentional_lag_external_duration_seconds_observed",
+			Help:    "Observed duration of intentional external call lag (histogram)",
 			Buckets: []float64{0.1, 0.5, 1.0, 2.0, 5.0},
 		},
 	)
@@ -512,7 +535,7 @@ func simulateDatabaseDelay(ctx context.Context) error {
 		)
 		time.Sleep(delay)
 		duration := time.Since(start)
-		lagDatabaseDuration.Observe(duration.Seconds())
+		lagDatabaseDurationObserved.Observe(duration.Seconds())
 		logger.Warn("intentional_lag_database",
 			zap.String("lag.type", "database"),
 			zap.Duration("lag.duration", delay),
@@ -551,7 +574,7 @@ func simulateCacheLookup(ctx context.Context) bool {
 		)
 		time.Sleep(delay)
 		duration := time.Since(start)
-		lagCacheDuration.Observe(duration.Seconds())
+		lagCacheDurationObserved.Observe(duration.Seconds())
 		logger.Warn("intentional_lag_cache",
 			zap.String("lag.type", "cache"),
 			zap.Duration("lag.duration", delay),
@@ -635,7 +658,7 @@ func handlePayment(w http.ResponseWriter, r *http.Request) {
 			)
 			time.Sleep(delay)
 			duration := time.Since(start)
-			lagExternalDuration.Observe(duration.Seconds())
+			lagExternalDurationObserved.Observe(duration.Seconds())
 		} else {
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -747,21 +770,27 @@ func main() {
 	if dbDelayStr := os.Getenv("INTENTIONAL_LAG_DATABASE_MS"); dbDelayStr != "" {
 		var dbDelay int
 		if _, err := fmt.Sscanf(dbDelayStr, "%d", &dbDelay); err == nil {
-			lagController.SetDatabaseDelay(time.Duration(dbDelay) * time.Millisecond)
+			delay := time.Duration(dbDelay) * time.Millisecond
+			lagController.SetDatabaseDelay(delay)
+			lagDatabaseDurationConfig.Set(delay.Seconds())
 		}
 	}
 
 	if cacheDelayStr := os.Getenv("INTENTIONAL_LAG_CACHE_MS"); cacheDelayStr != "" {
 		var cacheDelay int
 		if _, err := fmt.Sscanf(cacheDelayStr, "%d", &cacheDelay); err == nil {
-			lagController.SetCacheDelay(time.Duration(cacheDelay) * time.Millisecond)
+			delay := time.Duration(cacheDelay) * time.Millisecond
+			lagController.SetCacheDelay(delay)
+			lagCacheDurationConfig.Set(delay.Seconds())
 		}
 	}
 
 	if extDelayStr := os.Getenv("INTENTIONAL_LAG_EXTERNAL_MS"); extDelayStr != "" {
 		var extDelay int
 		if _, err := fmt.Sscanf(extDelayStr, "%d", &extDelay); err == nil {
-			lagController.SetExternalDelay(time.Duration(extDelay) * time.Millisecond)
+			delay := time.Duration(extDelay) * time.Millisecond
+			lagController.SetExternalDelay(delay)
+			lagExternalDurationConfig.Set(delay.Seconds())
 		}
 	}
 
