@@ -79,12 +79,19 @@ func initTracing() {
 		return
 	}
 
-	// Jaeger exporter usando agent endpoint
-	exporter, err := jaeger.New(jaeger.WithAgentEndpoint())
+	// Jaeger exporter usando collector HTTP endpoint
+	// Formato esperado: http://jaeger:14268/api/traces
+	collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
+	exporter, err := jaeger.New(
+		jaeger.WithCollectorEndpoint(
+			jaeger.WithEndpoint(collectorURL),
+		),
+	)
 	if err != nil {
 		logger.Error("Failed to create Jaeger exporter", zap.Error(err))
 		return
 	}
+	logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
 
 	// Sampling: 5% (menos crítico que payment)
 	sampler := tracesdk.TraceIDRatioBased(0.05)

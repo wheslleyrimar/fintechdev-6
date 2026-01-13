@@ -39,7 +39,7 @@ services:
     ports: ["8080:8080"]
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
-      - JAEGER_ENDPOINT=jaeger:6831
+      - JAEGER_ENDPOINT=jaeger:14268
       # Lag intencional (configurar para simular problemas de latência)
       # - INTENTIONAL_LAG_ENABLED=true
       # - INTENTIONAL_LAG_DATABASE_MS=2000
@@ -57,7 +57,7 @@ services:
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
       - SERVICE_NAME=antifraud
-      - JAEGER_ENDPOINT=jaeger:6831
+      - JAEGER_ENDPOINT=jaeger:14268
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -69,7 +69,7 @@ services:
     ports: ["8082:8080"]
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
-      - JAEGER_ENDPOINT=jaeger:6831
+      - JAEGER_ENDPOINT=jaeger:14268
     depends_on:
       rabbitmq:
         condition: service_healthy
