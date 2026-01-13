@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -413,8 +414,16 @@ func initTracing() {
 	}
 	logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
 
-	// Sampling: 10% das requisições (head-based sampling)
-	sampler := tracesdk.TraceIDRatioBased(0.1)
+	// Sampling: 100% das requisições para desenvolvimento/testes
+	// Em produção, usar 0.1 (10%) ou configurável via variável de ambiente JAEGER_SAMPLING_RATE
+	samplingRate := 1.0 // 100% - todas as requisições serão rastreadas por padrão
+	if envRate := os.Getenv("JAEGER_SAMPLING_RATE"); envRate != "" {
+		if parsed, err := strconv.ParseFloat(envRate, 64); err == nil {
+			samplingRate = parsed
+		}
+	}
+	logger.Info("Jaeger sampling rate configured", zap.Float64("rate", samplingRate))
+	sampler := tracesdk.TraceIDRatioBased(samplingRate)
 
 	tp := tracesdk.NewTracerProvider(
 		tracesdk.WithBatcher(exporter),
@@ -473,6 +482,19 @@ func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		traceID := traceCtx.TraceID().String()
 		spanID := traceCtx.SpanID().String()
 
+		// Obter span e garantir que seja finalizado
+		span := trace.SpanFromContext(ctx)
+		defer span.End() // Finalizar o span no final do middleware
+
+		// Adicionar atributos ao span
+		if span.IsRecording() {
+			span.SetAttributes(
+				attribute.String("correlation_id", correlationID),
+				attribute.String("http.method", r.Method),
+				attribute.String("http.path", r.URL.Path),
+			)
+		}
+
 		// Adicionar ao contexto
 		ctx = context.WithValue(ctx, "correlation_id", correlationID)
 		ctx = context.WithValue(ctx, "trace_id", traceID)
@@ -482,6 +504,13 @@ func loggingMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// Executar handler
 		next(rw, r.WithContext(ctx))
+
+		// Adicionar status code ao span após o handler executar
+		if span.IsRecording() {
+			span.SetAttributes(
+				attribute.Int("http.status_code", rw.statusCode),
+			)
+		}
 
 		// Log estruturado
 		duration := time.Since(start)
