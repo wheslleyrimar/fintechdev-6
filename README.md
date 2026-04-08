@@ -16,7 +16,7 @@ Laboratório prático para aula técnica de sistemas de fintech com foco em:
 - `k6` com dashboard web
 - `k6` com envio de métricas para Datadog via DogStatsD
 
-`Prometheus` e `Grafana` continuam no ambiente como apoio local, mas o fluxo principal da aula agora é Datadog-first.
+O fluxo principal de observabilidade da aula é Datadog-first.
 
 ## Como executar
 
@@ -63,7 +63,7 @@ Interfaces:
 - `chatty_db`
 - `cache_stampede`
 - `risk_dependency`
-- `intentionalLagEnabled`
+- `intentional_lag`
 
 `antifraud-service`:
 
@@ -95,20 +95,19 @@ Carga:
 - `./scripts/run-k6-datadog.sh k6/hot-accounts.js`
 - `./scripts/run-k6-datadog.sh k6/spike.js`
 
-## Documentação útil
+## Documentação ativa
 
-- [`docs/datadog-setup.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/datadog-setup.md)
-- [`docs/casos-praticos-datadog.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/casos-praticos-datadog.md)
-- [`docs/roteiro-demo-datadog.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/roteiro-demo-datadog.md)
-- [`docs/arquitetura.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/arquitetura.md)
-- [`docs/conceitos.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/conceitos.md)
-- [`docs/troubleshooting.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/troubleshooting.md)
-- [`observability/slo-examples.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/slo-examples.md)
+- [`docs/datadog-setup.md`](docs/datadog-setup.md)
+- [`docs/roteiro-demo-datadog.md`](docs/roteiro-demo-datadog.md)
+- [`docs/arquitetura.md`](docs/arquitetura.md)
+- [`docs/conceitos.md`](docs/conceitos.md)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- [`observability/slo-examples.md`](observability/slo-examples.md)
 
 ## Dashboards Datadog
 
 JSONs base para importação:
 
-- [`observability/datadog/dashboards/payment-health.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/payment-health.json)
-- [`observability/datadog/dashboards/k6-correlation.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/k6-correlation.json)
-- [`observability/datadog/dashboards/scenario-signals.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/scenario-signals.json)
+- [`observability/datadog/dashboards/payment-health.json`](observability/datadog/dashboards/payment-health.json)
+- [`observability/datadog/dashboards/k6-correlation.json`](observability/datadog/dashboards/k6-correlation.json)
+- [`observability/datadog/dashboards/scenario-signals.json`](observability/datadog/dashboards/scenario-signals.json)

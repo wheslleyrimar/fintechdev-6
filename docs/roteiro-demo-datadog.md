@@ -1213,6 +1213,38 @@ Se houver tempo, execute nesta ordem sugerida:
 ./scripts/run-k6-datadog.sh k6/baseline.js
 ```
 
+Efeitos colaterais esperados em cada caso (guia didático):
+
+1. `chatty_db`
+   - cliente (`k6`): latência sobe de forma progressiva; erro pode ficar baixo no começo;
+   - serviço online (`Payment Health`): `HTTP Duration p95/p99` sobem mais do que erro;
+   - APM: muitos spans de banco curtos e em série;
+   - negócio: pagamento responde, mas com experiência pior.
+
+2. `cache_stampede`
+   - cliente (`k6` com `hot-accounts`): piora mais forte na cauda (`p95/p99`);
+   - serviço online: maior pressão no banco e variação maior de tempo de resposta;
+   - APM: aumento do tempo em spans de banco/cache sob concorrência;
+   - negócio: comportamento instável em contas/chaves muito acessadas.
+
+3. `risk_dependency`
+   - cliente (`k6` com `spike`): latência sobe rápido; pode aparecer erro sob pico;
+   - serviço online: `p95/p99` pioram e pode haver sinais de proteção (`429`/breaker);
+   - APM: span externo domina o trace (dependência de risco lenta);
+   - negócio: autorização fica sensível ao estado de um terceiro.
+
+4. `async_lag`
+   - cliente (`k6`): pode continuar vendo respostas `201` razoáveis;
+   - serviço online (`Payment Health`): pode parecer saudável;
+   - assíncrono (`Scenario Signals` + APM antifraud): `Antifraud Throughput` cai e `Antifraud Processing p95` sobe;
+   - negócio: pós-processamento atrasa (risco/reconciliação), mesmo sem "queda" visível no online.
+
+Regra de ouro para explicar em sala:
+
+- "o colateral online aparece em latência/erro do pagamento;
+- o colateral assíncrono aparece em throughput/tempo do antifraude;
+- nem todo impacto de negócio aparece no mesmo gráfico."
+
 ### Etapa G: script de fala por incidente (modelo repetível)
 
 Repita sempre este mini-script:
