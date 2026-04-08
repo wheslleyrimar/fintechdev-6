@@ -1,133 +1,134 @@
-# Investigando Problemas de Latência
+# Troubleshooting de Incidentes
 
-[← Voltar ao README](../README.md)
+Runbook curto para a aula e para o laboratório.
 
----
+## 1. Comece pelo sintoma
 
-### Passo 1: Detectar o Problema
+Perguntas iniciais:
 
-**Sinais de alerta (métricas RED):**
+- a latência subiu?
+- o erro subiu junto ou depois?
+- a proteção começou a rejeitar?
+- o problema está no online ou no assíncrono?
 
-```promql
-# Latência p99 aumentando (sinal mais importante)
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 0.5
+## 2. Onde olhar no Datadog
 
-# Comparar p50 vs p99 (cauda longa indica problema)
-histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
-```
+Use esta ordem:
 
-**Alertas sugeridos:**
-- **Crítico**: p99 latência > 500ms por 5 minutos
-- **Warning**: p95 latência > 300ms por 5 minutos
+1. dashboard `Payment Health`
+2. dashboard `k6 Correlation`
+3. dashboard `Scenario Signals`
+4. APM do `payment-service`
+5. APM do `antifraud-service`
+6. logs filtrando por `service` e `trace_id`
 
-### Passo 2: Identificar o Gargalo
+## 3. Leitura por padrão de falha
 
-**Via Métricas:**
-```promql
-# Ver se lag intencional está ativo
-intentional_lag_enabled
+### Caso A: latência sobe sem explosão de erro
 
-# Ver qual componente tem mais lag
-intentional_lag_database_duration_seconds
-intentional_lag_cache_duration_seconds
-intentional_lag_external_duration_seconds
-```
+Suspeite de:
 
-**Via Traces (Jaeger):**
-1. Acesse: http://localhost:16686
-2. Selecione: `payment-service`
-3. Filtre por: `Duration > 1s`
-4. Analise a árvore de spans:
-   - Identifique o span mais lento
-   - Verifique atributos `lag.intentional` e `lag.type`
+- `chatty_db`
+- `cache_stampede`
+- dependência mais lenta sem timeout efetivo
 
-**Via Logs:**
+Confirme por:
+
+- p95/p99 em alta;
+- waterfall do trace mais comprido;
+- spans `db.select.*` ou `external.call.*` dominando duração.
+
+### Caso B: latência e erro sobem juntos
+
+Suspeite de:
+
+- dependência externa lenta;
+- breaker abrindo tarde;
+- spike pressionando limite do serviço.
+
+Confirme por:
+
+- `rate_limit_rejected_total`;
+- `circuit_breaker_state`;
+- traces com spans externos dominantes;
+- `k6` mostrando burst claro no mesmo instante.
+
+### Caso C: endpoint saudável, operação ruim
+
+Suspeite de:
+
+- degradação assíncrona;
+- consumidor lento;
+- backlog crescendo fora do caminho online.
+
+Confirme por:
+
+- `antifraud_processing_duration_percentiles`;
+- `antifraud_messages_processed_total`;
+- cenário `async_lag`;
+- divergência entre `payment-service` saudável e `antifraud-service` degradado.
+
+## 4. Ações rápidas por cenário
+
+### `chatty_db`
+
 ```bash
-# Buscar logs de lag
-docker compose logs payment-service | grep "intentional_lag"
-
-# Exemplo de log esperado:
-# {
-#   "level": "warn",
-#   "msg": "intentional_lag_database",
-#   "lag.type": "database",
-#   "lag.duration": "2s",
-#   "correlation_id": "test-123"
-# }
+./scripts/reset-scenarios.sh
+./scripts/run-k6-datadog.sh k6/baseline.js
 ```
 
-### Passo 3: Quantificar o Impacto
+Leitura:
 
-```promql
-# Quantas requisições afetadas?
-count(http_requests_total{endpoint="/payments"})
+- normalização do p95/p99;
+- queda do tempo total do trace.
 
-# Qual a latência média vs p99?
-avg(rate(http_request_duration_seconds_sum[5m])) / avg(rate(http_request_duration_seconds_count[5m]))
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
+### `cache_stampede`
 
-# Taxa de erro aumentou?
-rate(http_requests_total{status="5xx"}[5m]) / rate(http_requests_total[5m])
-```
-
-### Passo 4: Ações Imediatas
-
-**Se lag é intencional (demonstração):**
 ```bash
-# Verificar se lag está ativo
-docker compose exec payment-service printenv INTENTIONAL_LAG_ENABLED
-
-# Desativar lag (se necessário)
-./scripts/disable-lag.sh
-# OU edite docker-compose.yml e comente as variáveis INTENTIONAL_LAG_*
-# Depois: docker compose up -d payment-service
+./scripts/reset-scenarios.sh
+./scripts/run-k6-datadog.sh k6/hot-accounts.js
 ```
 
-**Se lag NÃO é intencional (problema real):**
+Leitura:
 
-**Gargalo no Banco de Dados:**
-- Verificar conexões do banco
-- Verificar queries lentas
-- Verificar índice faltando
-- Escalar para time de banco de dados
+- redução da cauda sob contas quentes;
+- menor participação relativa de spans de banco.
 
-**Gargalo no Cache:**
-- Verificar tamanho do cache
-- Verificar TTL
-- Verificar conectividade com Redis/cache
-- Escalar para time de plataforma
+### `risk_dependency`
 
-**Gargalo em Serviços Externos:**
-- Verificar saúde do serviço externo
-- Verificar rede
-- Escalar para time do serviço externo
+```bash
+./scripts/reset-scenarios.sh
+./scripts/run-k6-datadog.sh k6/spike.js
+```
 
-### Checklist de Investigação Rápida
+Leitura:
 
-**Fase 1: Detecção (2 minutos)**
-- [ ] Verificar métricas RED no Prometheus
-- [ ] Confirmar p99 > threshold
-- [ ] Verificar taxa de erro
+- redução de 429/503;
+- queda da duração dos spans externos.
 
-**Fase 2: Identificação (5 minutos)**
-- [ ] Verificar `intentional_lag_enabled`
-- [ ] Analisar traces no Jaeger
-- [ ] Verificar logs estruturados
-- [ ] Identificar componente mais lento
+### `async_lag`
 
-**Fase 3: Diagnóstico (5 minutos)**
-- [ ] Quantificar impacto (quantas requisições afetadas)
-- [ ] Identificar causa raiz
-- [ ] Documentar evidências
+```bash
+./scripts/reset-scenarios.sh
+./scripts/run-k6-datadog.sh k6/baseline.js
+```
 
-**Fase 4: Ação (variável)**
-- [ ] Ação imediata (se aplicável)
-- [ ] Escalar para time correto (se necessário)
-- [ ] Monitorar recuperação
-- [ ] Documentar incidente
+Leitura:
 
----
+- recomposição do throughput do antifraude;
+- queda do p95 assíncrono.
 
-[← Voltar ao README](../README.md)
+## 5. Estado dos cenários
 
+```bash
+curl http://localhost:8080/admin/scenarios
+curl http://localhost:8081/admin/scenarios
+```
+
+## 6. Perguntas que fecham o diagnóstico
+
+- qual span domina o trace?
+- o p99 piorou antes do erro?
+- há proteção atuando ou o serviço só está saturando?
+- a degradação está no serviço principal ou na dependência?
+- desligar o cenário normaliza os sinais?

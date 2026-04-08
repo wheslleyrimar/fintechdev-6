@@ -1,209 +1,114 @@
-# Aula 6 — Escalabilidade e Observabilidade
+# Aula 6 — Laboratório Fintech com Datadog e k6
 
-## 📚 Índice
+Laboratório prático para aula técnica de sistemas de fintech com foco em:
 
-1. [Visão Geral](#visão-geral)
-2. [Como Executar](#como-executar)
-3. [Documentação Completa](#documentação-completa)
-4. [Endpoints Disponíveis](#endpoints-disponíveis)
-5. [Checklist Técnico](#checklist-técnico)
+- carga controlada com `k6`;
+- traces, métricas e logs no Datadog;
+- incidentes reproduzíveis no caminho crítico de pagamentos;
+- análise antes, durante e depois da correção.
 
----
+## Stack principal
 
-## Visão Geral
+- Go 1.22
+- RabbitMQ
+- Datadog Agent
+- OpenTelemetry OTLP HTTP
+- `k6` com dashboard web
+- `k6` com envio de métricas para Datadog via DogStatsD
 
-Este projeto demonstra **escalabilidade e observabilidade** em sistemas distribuídos, implementando:
+`Prometheus` e `Grafana` continuam no ambiente como apoio local, mas o fluxo principal da aula agora é Datadog-first.
 
-- ✅ **Métricas RED** (Rate, Errors, Duration) e **USE** (Utilization, Saturation, Errors)
-- ✅ **Logs estruturados** com correlation ID e trace ID
-- ✅ **Tracing distribuído** com Jaeger
-- ✅ **Backpressure** e **rate limiting**
-- ✅ **Circuit breaker** para resiliência
-- ✅ **Percentis de latência** (p50, p90, p95, p99)
-- ✅ **Lag intencional** para simular problemas reais
+## Como executar
 
-### Stack Tecnológica
+Pré-requisitos:
 
-- **Go 1.22**: Serviços de alta performance
-- **Prometheus**: Coleta de métricas
-- **Grafana**: Visualização de métricas
-- **Jaeger**: Distributed tracing
-- **RabbitMQ**: Message broker
-- **Docker Compose**: Orquestração
+- Docker e Docker Compose
+- conta trial do Datadog
+- `.env` com `DATADOG_API_KEY`
 
----
-
-## Como Executar
-
-### Pré-requisitos
-
-- Docker e Docker Compose instalados
-- Portas disponíveis: 8080, 8081, 8082, 5672, 15672, 9090, 3000, 16686
-
-### Passo 1: Subir o Ambiente
+Setup:
 
 ```bash
-cd "/Users/wheslley/Desktop/Fintech Dev/Aula 6/fintechdev-6"
+cp .env.example .env
 docker compose up --build
+docker compose --profile k6 build k6-datadog
 ```
 
-### Passo 2: Aguardar Inicialização
-
-Aguarde até ver nos logs:
-```
-payment-service    | payment-service listening on :8080
-antifraud-service  | antifraud-service ready
-notification-service | notification-service ready
-```
-
-### Passo 3: Verificar Saúde
+Validação rápida:
 
 ```bash
 curl http://localhost:8080/health
+curl http://localhost:8080/admin/scenarios
 ```
 
-Resposta esperada: `{"status":"healthy"}`
+Interfaces:
 
-### Passo 4: Acessar Interfaces de Observabilidade
+- Datadog: trial web
+- RabbitMQ: `http://localhost:15672`
+- k6 web dashboard: `http://127.0.0.1:5665`
 
-- **Prometheus**: http://localhost:9090
-- **Grafana**: http://localhost:3000 (admin/admin)
-- **Jaeger**: http://localhost:16686
-- **RabbitMQ Management**: http://localhost:15672 (guest/guest)
+## Fluxo operacional da aula
 
----
+1. Subir o ambiente e validar ingestão no Datadog.
+2. Rodar baseline com `k6`.
+3. Ativar um incidente reproduzível.
+4. Correlacionar `k6 web`, APM, métricas e logs.
+5. Aplicar correção operacional.
+6. Rodar novamente e mostrar normalização.
 
-## Documentação Completa
+## Cenários disponíveis
 
-A documentação completa está organizada em documentos separados para facilitar a navegação:
+`payment-service`:
 
-### 📖 Conceitos Fundamentais
-**[docs/conceitos.md](docs/conceitos.md)**
-- Escalabilidade: três dimensões
-- Escala vertical vs horizontal
-- Observabilidade: três sinais
-- Métricas RED vs USE
-- Percentis e latência de cauda
-- Backpressure e controle de carga
-- SLO, SLA e Error Budget
+- `chatty_db`
+- `cache_stampede`
+- `risk_dependency`
+- `intentionalLagEnabled`
 
-### 🏗️ Arquitetura do Sistema
-**[docs/arquitetura.md](docs/arquitetura.md)**
-- Diagrama de arquitetura (Mermaid)
-- Fluxo de processamento de pagamento
-- Fluxo de observabilidade
-- Componentes e dependências
+`antifraud-service`:
 
-### 🧪 Guia Completo: Testando e Analisando LAG
-**[docs/guia-lag.md](docs/guia-lag.md)**
-- O que é LAG e por que simular
-- Passo a passo completo (6 fases):
-  - Fase 1: Baseline - Sistema sem LAG
-  - Fase 2: Ativando LAG Intencional
-  - Fase 3: Gerando Requisições com LAG
-  - Fase 4: Analisando LAG nas Ferramentas de Observabilidade
-  - Fase 5: Diagnóstico e Documentação
-  - Fase 6: Desativando LAG
-- Exemplos práticos de requisições
-- Análise detalhada em Prometheus, Grafana, Jaeger e Logs
+- `async_lag`
 
-### 📊 Guia Completo: Analisando Observabilidade
-**[docs/guia-observabilidade.md](docs/guia-observabilidade.md)**
-- **Prometheus**: Conceitos, queries essenciais, como analisar
-- **Grafana**: Dashboards RED e USE, análise de painéis
-- **Jaeger**: Busca de traces, análise de spans, identificação de gargalos
-- **Logs**: Logs estruturados, filtros, formatação com jq
-- Exemplos práticos e didáticos para cada ferramenta
+Estado atual:
 
-### 🔍 Investigando Problemas de Latência
-**[docs/troubleshooting.md](docs/troubleshooting.md)**
-- Detecção de problemas
-- Identificação de gargalos
-- Quantificação de impacto
-- Ações imediatas
-- Checklist de investigação rápida
-
-### 🧪 Testes e Demonstrações
-**[docs/testes.md](docs/testes.md)**
-- Requisição básica
-- Teste de carga
-- Simulação de gargalos
-- Demonstração de lag intencional
-- Análise de métricas
-- Análise de traces
-
----
-
-## Endpoints Disponíveis
-
-### Payment Service (porta 8080)
-
-| Método | Endpoint | Descrição |
-|--------|----------|-----------|
-| `POST` | `/payments` | Criar pagamento |
-| `GET` | `/health` | Health check |
-| `GET` | `/metrics` | Métricas Prometheus |
-
-### Exemplo de Requisição
-
-**Request:**
 ```bash
-curl -X POST http://localhost:8080/payments \
-  -H "Content-Type: application/json" \
-  -H "X-Correlation-ID: meu-pagamento-123" \
-  -d '{
-    "accountId": "acc-1",
-    "amount": 100.50,
-    "currency": "BRL"
-  }'
+curl http://localhost:8080/admin/scenarios
+curl http://localhost:8081/admin/scenarios
 ```
 
-**Response (201 Created):**
-```json
-{
-  "paymentId": "pay-abc123xyz",
-  "status": "PROCESSED",
-  "processedAt": "2024-01-15T10:30:00Z"
-}
-```
+## Scripts principais
 
-**Headers de Response:**
-- `X-Correlation-ID`: ID de correlação usado
-- `X-Trace-ID`: ID do trace distribuído
+Ativação de cenários:
 
----
+- `./scripts/enable-chatty-db.sh`
+- `./scripts/enable-cache-stampede.sh`
+- `./scripts/enable-risk-dependency.sh`
+- `./scripts/enable-async-lag.sh`
+- `./scripts/enable-lag.sh`
+- `./scripts/disable-lag.sh`
+- `./scripts/reset-scenarios.sh`
 
-## Checklist Técnico
+Carga:
 
-### ✅ Esse serviço é observável?
-- [ ] Expõe métricas (Prometheus)
-- [ ] Logs estruturados (JSON)
-- [ ] Traces distribuídos (Jaeger)
-- [ ] Correlation ID e Trace ID
+- `./scripts/run-k6-web.sh k6/baseline.js`
+- `./scripts/run-k6-datadog.sh k6/baseline.js`
+- `./scripts/run-k6-datadog.sh k6/hot-accounts.js`
+- `./scripts/run-k6-datadog.sh k6/spike.js`
 
-### ✅ Esse gargalo é detectável?
-- [ ] Métricas mostram latência alta
-- [ ] Traces identificam operação lenta
-- [ ] Logs indicam causa (ex: "slow query")
-- [ ] Percentis (p99) revelam cauda
+## Documentação útil
 
-### ✅ Esse alerta é acionável?
-- [ ] Aponta violação de SLO
-- [ ] Indica impacto no usuário
-- [ ] Dispara ação clara
-- [ ] Tem runbook associado
+- [`docs/datadog-setup.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/datadog-setup.md)
+- [`docs/casos-praticos-datadog.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/casos-praticos-datadog.md)
+- [`docs/roteiro-demo-datadog.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/roteiro-demo-datadog.md)
+- [`docs/arquitetura.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/arquitetura.md)
+- [`docs/conceitos.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/conceitos.md)
+- [`docs/troubleshooting.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/docs/troubleshooting.md)
+- [`observability/slo-examples.md`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/slo-examples.md)
 
----
+## Dashboards Datadog
 
-## Suporte
+JSONs base para importação:
 
-Em caso de dúvidas:
-
-1. Verifique logs: `docker compose logs -f`
-2. Verifique métricas: http://localhost:9090
-3. Verifique traces: http://localhost:16686
-4. Consulte a [documentação completa](#documentação-completa)
-
----
-
-**Desenvolvido para demonstrar escalabilidade e observabilidade em sistemas distribuídos.**
+- [`observability/datadog/dashboards/payment-health.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/payment-health.json)
+- [`observability/datadog/dashboards/k6-correlation.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/k6-correlation.json)
+- [`observability/datadog/dashboards/scenario-signals.json`](/Users/wheslley/Desktop/Fintech%20Dev/Aula%206/fintechdev-6/observability/datadog/dashboards/scenario-signals.json)

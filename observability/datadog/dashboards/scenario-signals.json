@@ -1,0 +1,94 @@
+{
+  "title": "Fintech Lab - Scenario Signals",
+  "description": "Sinais dos incidentes reproduziveis usados na aula.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "dev"
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "title": "Scenario Flags",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.scenario_enabled{service:payment-service,env:dev} by {scenario}",
+            "display_type": "line"
+          },
+          {
+            "q": "avg:fintechdev.antifraud_scenario_enabled{service:antifraud-service,env:dev} by {scenario}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Configured Intentional Lag",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.intentional_lag_database_duration_seconds{service:payment-service,env:dev}",
+            "display_type": "line"
+          },
+          {
+            "q": "avg:fintechdev.intentional_lag_cache_duration_seconds{service:payment-service,env:dev}",
+            "display_type": "line"
+          },
+          {
+            "q": "avg:fintechdev.intentional_lag_external_duration_seconds{service:payment-service,env:dev}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Observed Lag Histograms",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.intentional_lag_database_duration_seconds_observed.avg{service:payment-service,env:dev}",
+            "display_type": "line"
+          },
+          {
+            "q": "avg:fintechdev.intentional_lag_cache_duration_seconds_observed.avg{service:payment-service,env:dev}",
+            "display_type": "line"
+          },
+          {
+            "q": "avg:fintechdev.intentional_lag_external_duration_seconds_observed.avg{service:payment-service,env:dev}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Antifraud Throughput",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:fintechdev.antifraud_messages_processed.count{service:antifraud-service,env:dev}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Antifraud Processing p95",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.antifraud_processing_duration_percentiles.quantile{service:antifraud-service,quantile:0.95,env:dev}",
+            "display_type": "line"
+          }
+        ]
+      }
+    }
+  ]
+}

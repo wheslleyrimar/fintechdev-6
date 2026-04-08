@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
@@ -42,6 +44,49 @@ type PaymentResponse struct {
 	ProcessedAt time.Time `json:"processedAt"`
 }
 
+type ScenarioController struct {
+	mu             sync.RWMutex
+	chattyDB       bool
+	cacheStampede  bool
+	riskDependency bool
+}
+
+func (sc *ScenarioController) Snapshot() map[string]bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return map[string]bool{
+		"chatty_db":       sc.chattyDB,
+		"cache_stampede":  sc.cacheStampede,
+		"risk_dependency": sc.riskDependency,
+	}
+}
+
+func (sc *ScenarioController) Set(chattyDB, cacheStampede, riskDependency bool) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.chattyDB = chattyDB
+	sc.cacheStampede = cacheStampede
+	sc.riskDependency = riskDependency
+}
+
+func (sc *ScenarioController) IsChattyDBEnabled() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.chattyDB
+}
+
+func (sc *ScenarioController) IsCacheStampedeEnabled() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.cacheStampede
+}
+
+func (sc *ScenarioController) IsRiskDependencyEnabled() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	return sc.riskDependency
+}
+
 // Lag Controller - Para simular lag intencional e reproduzível
 type LagController struct {
 	mu            sync.RWMutex
@@ -59,6 +104,8 @@ var lagController = &LagController{
 	externalDelay: 1 * time.Second,
 	lagPercentage: 1.0, // 100% das requisições por padrão quando habilitado
 }
+
+var scenarioController = &ScenarioController{}
 
 func (lc *LagController) SetEnabled(enabled bool) {
 	lc.mu.Lock()
@@ -383,6 +430,14 @@ var (
 			Buckets: []float64{0.1, 0.5, 1.0, 2.0, 5.0},
 		},
 	)
+
+	scenarioEnabled = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "scenario_enabled",
+			Help: "Whether a teaching scenario is enabled (1=enabled, 0=disabled)",
+		},
+		[]string{"scenario"},
+	)
 )
 
 // ============================================================================
@@ -393,26 +448,48 @@ var logger *zap.Logger
 var tracer trace.Tracer
 
 func initTracing() {
-	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
-
-	if jaegerEndpoint == "" {
-		logger.Warn("No Jaeger endpoint configured, tracing disabled")
-		return
+	ctx := context.Background()
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "payment-service"
 	}
 
-	// Jaeger exporter usando collector HTTP endpoint
-	// Formato esperado: http://jaeger:14268/api/traces
-	collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
-	exporter, err := jaeger.New(
-		jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(collectorURL),
-		),
+	var (
+		exporter tracesdk.SpanExporter
+		err      error
 	)
-	if err != nil {
-		logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+
+	if otlpEndpoint != "" {
+		exporter, err = otlptracehttp.New(
+			ctx,
+			otlptracehttp.WithEndpointURL(otlpEndpoint),
+		)
+		if err != nil {
+			logger.Error("Failed to create OTLP exporter", zap.Error(err), zap.String("endpoint", otlpEndpoint))
+			return
+		}
+		logger.Info("Using OTLP for tracing", zap.String("endpoint", otlpEndpoint))
+	} else if jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT"); jaegerEndpoint != "" {
+		collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
+		exporter, err = jaeger.New(
+			jaeger.WithCollectorEndpoint(
+				jaeger.WithEndpoint(collectorURL),
+			),
+		)
+		if err != nil {
+			logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+			return
+		}
+		logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
+	} else {
+		logger.Warn("No tracing exporter configured, tracing disabled")
 		return
 	}
-	logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
 
 	// Sampling: 100% das requisições para desenvolvimento/testes
 	// Em produção, usar 0.1 (10%) ou configurável via variável de ambiente JAEGER_SAMPLING_RATE
@@ -429,7 +506,7 @@ func initTracing() {
 		tracesdk.WithBatcher(exporter),
 		tracesdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceName("payment-service"),
+			semconv.ServiceName(serviceName),
 		)),
 		tracesdk.WithSampler(sampler),
 	)
@@ -440,7 +517,7 @@ func initTracing() {
 		propagation.Baggage{},
 	))
 
-	tracer = otel.Tracer("payment-service")
+	tracer = otel.Tracer(serviceName)
 }
 
 func initLogger() {
@@ -552,48 +629,50 @@ func getLogLevel(statusCode int) string {
 	return "info"
 }
 
-// Simular gargalo: banco de dados lento
-func simulateDatabaseDelay(ctx context.Context) error {
+func setScenarioMetric(name string, enabled bool) {
+	value := 0.0
+	if enabled {
+		value = 1.0
+	}
+	scenarioEnabled.WithLabelValues(name).Set(value)
+}
+
+func updateScenarioMetrics() {
+	setScenarioMetric("chatty_db", scenarioController.IsChattyDBEnabled())
+	setScenarioMetric("cache_stampede", scenarioController.IsCacheStampedeEnabled())
+	setScenarioMetric("risk_dependency", scenarioController.IsRiskDependencyEnabled())
+	setScenarioMetric("intentional_lag", lagController.IsEnabled())
+}
+
+func simulateNamedDatabaseQuery(ctx context.Context, operation string, baseDelay time.Duration) error {
 	start := time.Now()
-	_, span := tracer.Start(ctx, "database.query")
+	_, span := tracer.Start(ctx, operation)
 	defer span.End()
 
-	baseDelay := 10 * time.Millisecond
-
-	// Lag intencional tem prioridade sobre lag aleatório
 	if lagController.ShouldApplyLag() {
 		delay := lagController.GetDatabaseDelay()
 		span.SetAttributes(
 			attribute.Bool("lag.intentional", true),
 			attribute.String("lag.type", "database"),
 			attribute.Int64("lag.duration_ms", delay.Milliseconds()),
+			attribute.String("db.operation", operation),
 		)
 		time.Sleep(delay)
-		duration := time.Since(start)
-		lagDatabaseDurationObserved.Observe(duration.Seconds())
-		logger.Warn("intentional_lag_database",
-			zap.String("lag.type", "database"),
-			zap.Duration("lag.duration", delay),
-			zap.Duration("actual.duration", duration),
-		)
-		span.RecordError(fmt.Errorf("intentional lag: database delay %v", delay))
+		lagDatabaseDurationObserved.Observe(time.Since(start).Seconds())
 		return nil
 	}
 
-	// Simular latência variável (cauda longa) - comportamento original
-	// 1% das requisições tem latência alta (cauda)
-	if rand.Float64() < 0.01 {
-		delay := baseDelay + time.Duration(rand.Intn(2000))*time.Millisecond
-		time.Sleep(delay)
-		span.RecordError(fmt.Errorf("slow query detected: %v", delay))
-	} else {
-		time.Sleep(baseDelay)
-	}
+	time.Sleep(baseDelay)
 	return nil
 }
 
+// Simular gargalo: banco de dados lento
+func simulateDatabaseDelay(ctx context.Context) error {
+	return simulateNamedDatabaseQuery(ctx, "database.query", 10*time.Millisecond)
+}
+
 // Simular gargalo: cache miss
-func simulateCacheLookup(ctx context.Context) bool {
+func simulateCacheLookup(ctx context.Context, accountID string) bool {
 	start := time.Now()
 	_, span := tracer.Start(ctx, "cache.lookup")
 	defer span.End()
@@ -618,6 +697,15 @@ func simulateCacheLookup(ctx context.Context) bool {
 		return false
 	}
 
+	if scenarioController.IsCacheStampedeEnabled() && strings.HasPrefix(accountID, "hot-") {
+		span.SetAttributes(
+			attribute.Bool("cache.hit", false),
+			attribute.Bool("scenario.cache_stampede", true),
+		)
+		time.Sleep(80 * time.Millisecond)
+		return false
+	}
+
 	// 80% cache hit, 20% miss (gargalo) - comportamento original
 	if rand.Float64() < 0.8 {
 		span.SetAttributes(attribute.Bool("cache.hit", true))
@@ -626,6 +714,94 @@ func simulateCacheLookup(ctx context.Context) bool {
 	span.SetAttributes(attribute.Bool("cache.hit", false))
 	time.Sleep(50 * time.Millisecond) // Simular cache miss
 	return false
+}
+
+func handleAdminScenarios(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		response := map[string]interface{}{
+			"lag": map[string]interface{}{
+				"enabled":           lagController.IsEnabled(),
+				"database_delay_ms": lagController.GetDatabaseDelay().Milliseconds(),
+				"cache_delay_ms":    lagController.GetCacheDelay().Milliseconds(),
+				"external_delay_ms": lagController.GetExternalDelay().Milliseconds(),
+				"lag_percentage":    lagController.lagPercentage,
+			},
+			"scenarios": scenarioController.Snapshot(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		IntentionalLagEnabled *bool    `json:"intentionalLagEnabled"`
+		DatabaseDelayMs       *int     `json:"databaseDelayMs"`
+		CacheDelayMs          *int     `json:"cacheDelayMs"`
+		ExternalDelayMs       *int     `json:"externalDelayMs"`
+		LagPercentage         *float64 `json:"lagPercentage"`
+		ChattyDB              *bool    `json:"chattyDb"`
+		CacheStampede         *bool    `json:"cacheStampede"`
+		RiskDependency        *bool    `json:"riskDependency"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if payload.IntentionalLagEnabled != nil {
+		lagController.SetEnabled(*payload.IntentionalLagEnabled)
+		lagEnabled.Set(boolToFloat(*payload.IntentionalLagEnabled))
+	}
+	if payload.DatabaseDelayMs != nil {
+		delay := time.Duration(*payload.DatabaseDelayMs) * time.Millisecond
+		lagController.SetDatabaseDelay(delay)
+		lagDatabaseDurationConfig.Set(delay.Seconds())
+	}
+	if payload.CacheDelayMs != nil {
+		delay := time.Duration(*payload.CacheDelayMs) * time.Millisecond
+		lagController.SetCacheDelay(delay)
+		lagCacheDurationConfig.Set(delay.Seconds())
+	}
+	if payload.ExternalDelayMs != nil {
+		delay := time.Duration(*payload.ExternalDelayMs) * time.Millisecond
+		lagController.SetExternalDelay(delay)
+		lagExternalDurationConfig.Set(delay.Seconds())
+	}
+	if payload.LagPercentage != nil {
+		lagController.SetLagPercentage(*payload.LagPercentage)
+	}
+
+	current := scenarioController.Snapshot()
+	chatty := current["chatty_db"]
+	cacheStampede := current["cache_stampede"]
+	riskDependency := current["risk_dependency"]
+	if payload.ChattyDB != nil {
+		chatty = *payload.ChattyDB
+	}
+	if payload.CacheStampede != nil {
+		cacheStampede = *payload.CacheStampede
+	}
+	if payload.RiskDependency != nil {
+		riskDependency = *payload.RiskDependency
+	}
+	scenarioController.Set(chatty, cacheStampede, riskDependency)
+	updateScenarioMetrics()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func boolToFloat(v bool) float64 {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func handlePayment(w http.ResponseWriter, r *http.Request) {
@@ -648,8 +824,8 @@ func handlePayment(w http.ResponseWriter, r *http.Request) {
 	// Circuit breaker para dependências
 	circuitBreaker := NewCircuitBreaker(5, 30*time.Second)
 	err := circuitBreaker.Call(func() error {
-		// Simular chamada a serviço externo
-		if rand.Float64() < 0.05 { // 5% de falha
+		// Keep the baseline healthy; only inject dependency failures during the explicit scenario.
+		if scenarioController.IsRiskDependencyEnabled() && rand.Float64() < 0.05 {
 			return fmt.Errorf("external service error")
 		}
 		return nil
@@ -675,8 +851,25 @@ func handlePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Simular gargalos
-	_ = simulateCacheLookup(ctx)
-	_ = simulateDatabaseDelay(ctx)
+	cacheHit := simulateCacheLookup(ctx, req.AccountID)
+	if !cacheHit {
+		_ = simulateDatabaseDelay(ctx)
+	}
+
+	if scenarioController.IsChattyDBEnabled() {
+		operations := []string{
+			"db.select.account_origin",
+			"db.select.account_destination",
+			"db.select.balance_origin",
+			"db.select.limits_origin",
+			"db.select.kyc_origin",
+			"db.select.kyc_destination",
+			"db.select.antifraud_score",
+		}
+		for _, operation := range operations {
+			_ = simulateNamedDatabaseQuery(ctx, operation, 20*time.Millisecond)
+		}
+	}
 
 	// Simular serviço chatty (múltiplas chamadas)
 	for i := 0; i < 3; i++ {
@@ -694,6 +887,13 @@ func handlePayment(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(delay)
 			duration := time.Since(start)
 			lagExternalDurationObserved.Observe(duration.Seconds())
+		} else if scenarioController.IsRiskDependencyEnabled() {
+			delay := 250*time.Millisecond + time.Duration(rand.Intn(500))*time.Millisecond
+			span.SetAttributes(
+				attribute.Bool("scenario.risk_dependency", true),
+				attribute.Int64("external.delay_ms", delay.Milliseconds()),
+			)
+			time.Sleep(delay)
 		} else {
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -829,8 +1029,11 @@ func main() {
 		}
 	}
 
+	updateScenarioMetrics()
+
 	http.HandleFunc("/payments", loggingMiddleware(handlePayment))
 	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/admin/scenarios", handleAdminScenarios)
 	http.Handle("/metrics", promhttp.Handler())
 
 	logger.Info("payment-service listening on :8080",

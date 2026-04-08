@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
@@ -66,25 +67,48 @@ var (
 )
 
 func initTracing() {
-	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
-
-	if jaegerEndpoint == "" {
-		return
+	ctx := context.Background()
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "notification-service"
 	}
 
-	// Jaeger exporter usando collector HTTP endpoint
-	// Formato esperado: http://jaeger:14268/api/traces
-	collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
-	exporter, err := jaeger.New(
-		jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(collectorURL),
-		),
+	var (
+		exporter tracesdk.SpanExporter
+		err      error
 	)
-	if err != nil {
-		logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+
+	if otlpEndpoint != "" {
+		exporter, err = otlptracehttp.New(
+			ctx,
+			otlptracehttp.WithEndpointURL(otlpEndpoint),
+		)
+		if err != nil {
+			logger.Error("Failed to create OTLP exporter", zap.Error(err), zap.String("endpoint", otlpEndpoint))
+			return
+		}
+		logger.Info("Using OTLP for tracing", zap.String("endpoint", otlpEndpoint))
+	} else if jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT"); jaegerEndpoint != "" {
+		collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
+		exporter, err = jaeger.New(
+			jaeger.WithCollectorEndpoint(
+				jaeger.WithEndpoint(collectorURL),
+			),
+		)
+		if err != nil {
+			logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+			return
+		}
+		logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
+	} else {
+		logger.Warn("No tracing exporter configured, tracing disabled")
 		return
 	}
-	logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
 
 	// Sampling: 2% (notificações são menos críticas)
 	sampler := tracesdk.TraceIDRatioBased(0.02)
@@ -93,7 +117,7 @@ func initTracing() {
 		tracesdk.WithBatcher(exporter),
 		tracesdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceName("notification-service"),
+			semconv.ServiceName(serviceName),
 		)),
 		tracesdk.WithSampler(sampler),
 	)
@@ -104,7 +128,7 @@ func initTracing() {
 		propagation.Baggage{},
 	))
 
-	tracer = otel.Tracer("notification-service")
+	tracer = otel.Tracer(serviceName)
 }
 
 func initLogger() {
@@ -226,7 +250,7 @@ func main() {
 		rabbitURL = "amqp://guest:guest@rabbitmq:5672/"
 	}
 
-	conn, err := amqp.Dial(rabbitURL)
+	conn, err := connectRabbitMQWithRetry(rabbitURL)
 	if err != nil {
 		logger.Fatal("failed_to_connect_rabbitmq", zap.Error(err))
 	}
@@ -267,4 +291,23 @@ func main() {
 		ctx := extractTraceContext(msg.Headers)
 		processPayment(ctx, msg.Body, msg.Headers)
 	}
+}
+
+func connectRabbitMQWithRetry(rabbitURL string) (*amqp.Connection, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 30; attempt++ {
+		conn, err := amqp.Dial(rabbitURL)
+		if err == nil {
+			return conn, nil
+		}
+
+		lastErr = err
+		logger.Warn("failed_to_connect_rabbitmq_retrying",
+			zap.Int("attempt", attempt),
+			zap.Error(err),
+		)
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil, fmt.Errorf("rabbitmq unavailable after retries: %w", lastErr)
 }

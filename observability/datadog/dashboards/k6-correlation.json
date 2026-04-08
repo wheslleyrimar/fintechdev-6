@@ -1,0 +1,78 @@
+{
+  "title": "Fintech Lab - k6 Correlation",
+  "description": "Correlacao entre carga do k6 e comportamento do payment-service.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "dev"
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "title": "k6 Iterations",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:k6iterations{*} by {cenario}.as_count()",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "k6 Request Duration p95",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:k6http_req_duration.95percentile{*} by {cenario}.rollup(max, 10)",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "k6 Failed Requests",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:k6http_req_failed{*} by {cenario}.as_count()",
+            "display_type": "bars"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Payment Service p95",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.http_request_duration_percentiles.quantile{service:payment-service,quantile:0.95,env:dev}.rollup(max, 10)",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Rate Limit vs Traffic",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:fintechdev.http_requests.count{service:payment-service,env:dev}",
+            "display_type": "line"
+          },
+          {
+            "q": "sum:fintechdev.rate_limit_rejected.count{service:payment-service,env:dev}",
+            "display_type": "bars"
+          }
+        ]
+      }
+    }
+  ]
+}

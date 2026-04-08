@@ -1,4 +1,25 @@
 services:
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:latest
+    environment:
+      - DD_API_KEY=${DATADOG_API_KEY}
+      - DD_SITE=${DATADOG_SITE:-datadoghq.com}
+      - DD_ENV=dev
+      - HOST_PROC=/proc
+      - DD_APM_ENABLED=true
+      - DD_LOGS_ENABLED=true
+      - DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL=true
+      - DD_OTLP_CONFIG_RECEIVER_PROTOCOLS_HTTP_ENDPOINT=0.0.0.0:4318
+      - DD_PROCESS_AGENT_ENABLED=true
+      - DD_CONTAINER_EXCLUDE_LOGS=name:datadog-agent
+      - DD_DOGSTATSD_NON_LOCAL_TRAFFIC=true
+    ports: ["8126:8126", "4318:4318"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc/:/host/proc/:ro
+      - /sys/fs/cgroup/:/host/sys/fs/cgroup:ro
+      - ./observability/datadog/conf.d:/etc/datadog-agent/conf.d:ro
+
   rabbitmq:
     image: rabbitmq:3-management
     ports: ["5672:5672", "15672:15672"]
@@ -8,38 +29,15 @@ services:
       timeout: 5s
       retries: 5
 
-  jaeger:
-    image: jaegertracing/all-in-one:1.55
-    ports: ["16686:16686", "4317:4317", "14268:14268"]
-
-  prometheus:
-    image: prom/prometheus:latest
-    volumes:
-      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
-    ports: ["9090:9090"]
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-
-  grafana:
-    image: grafana/grafana:latest
-    ports: ["3000:3000"]
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_INSTALL_PLUGINS=
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./observability/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./observability/grafana/datasources:/etc/grafana/provisioning/datasources
-
   payment-service:
     build: ./services/payment
     ports: ["8080:8080"]
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
-      - JAEGER_ENDPOINT=jaeger:14268
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://datadog-agent:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_SERVICE_NAME=payment-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.version=1.0.0,deployment.environment=dev,fintech.domain=payments
       # Lag intencional (configurar para simular problemas de latência)
       # - INTENTIONAL_LAG_ENABLED=true
       # - INTENTIONAL_LAG_DATABASE_MS=2000
@@ -48,7 +46,7 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
-      jaeger:
+      datadog-agent:
         condition: service_started
 
   antifraud-service:
@@ -57,11 +55,14 @@ services:
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
       - SERVICE_NAME=antifraud
-      - JAEGER_ENDPOINT=jaeger:14268
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://datadog-agent:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_SERVICE_NAME=antifraud-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.version=1.0.0,deployment.environment=dev,fintech.domain=risk
     depends_on:
       rabbitmq:
         condition: service_healthy
-      jaeger:
+      datadog-agent:
         condition: service_started
 
   notification-service:
@@ -69,12 +70,52 @@ services:
     ports: ["8082:8080"]
     environment:
       - RABBIT_URL=amqp://guest:guest@rabbitmq:5672/
-      - JAEGER_ENDPOINT=jaeger:14268
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://datadog-agent:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      - OTEL_SERVICE_NAME=notification-service
+      - OTEL_RESOURCE_ATTRIBUTES=service.version=1.0.0,deployment.environment=dev,fintech.domain=notifications
     depends_on:
       rabbitmq:
         condition: service_healthy
-      jaeger:
+      datadog-agent:
         condition: service_started
 
-volumes:
-  grafana_data:
+  k6-web:
+    image: grafana/k6:latest
+    profiles: ["k6"]
+    entrypoint: ["k6"]
+    working_dir: /work
+    volumes:
+      - ./:/work
+    environment:
+      - BASE_URL=http://host.docker.internal:8080
+      - K6_WEB_DASHBOARD=true
+      - K6_WEB_DASHBOARD_PORT=5665
+      - K6_WEB_DASHBOARD_EXPORT=/work/reports/compose-k6-report.html
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports: ["5665:5665"]
+
+  k6-datadog:
+    build:
+      context: .
+      dockerfile: ./observability/k6/Dockerfile.datadog
+    profiles: ["k6"]
+    entrypoint: ["k6"]
+    working_dir: /work
+    volumes:
+      - ./:/work
+    environment:
+      - BASE_URL=http://payment-service:8080
+      - K6_WEB_DASHBOARD=true
+      - K6_WEB_DASHBOARD_PORT=5665
+      - K6_WEB_DASHBOARD_EXPORT=/work/reports/compose-k6-datadog-report.html
+      - K6_STATSD_ADDR=datadog-agent:8125
+      - K6_STATSD_ENABLE_TAGS=true
+      - K6_STATSD_NAMESPACE=k6
+    depends_on:
+      datadog-agent:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    ports: ["5665:5665"]

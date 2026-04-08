@@ -1,0 +1,86 @@
+{
+  "title": "Fintech Lab - Payment Health",
+  "description": "Saude do fluxo online de pagamentos para a aula de incidentes fintech.",
+  "layout_type": "ordered",
+  "template_variables": [
+    {
+      "name": "env",
+      "prefix": "env",
+      "default": "dev"
+    }
+  ],
+  "widgets": [
+    {
+      "definition": {
+        "title": "HTTP Requests",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:fintechdev.http_requests.count{service:payment-service,env:dev}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "HTTP Duration p95",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.http_request_duration_percentiles.quantile{service:payment-service,quantile:0.95,env:dev}.rollup(max, 10)",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "HTTP Duration p99",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.http_request_duration_percentiles.quantile{service:payment-service,quantile:0.99,env:dev}.rollup(max, 10)",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Rate Limited",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:fintechdev.rate_limit_rejected.count{service:payment-service,env:dev}",
+            "display_type": "bars"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Circuit Breaker State",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "avg:fintechdev.circuit_breaker_state{service:payment-service,env:dev} by {dependency}",
+            "display_type": "line"
+          }
+        ]
+      }
+    },
+    {
+      "definition": {
+        "title": "Payments Processed",
+        "type": "timeseries",
+        "requests": [
+          {
+            "q": "sum:fintechdev.payments_processed.count{service:payment-service,env:dev} by {status}",
+            "display_type": "line"
+          }
+        ]
+      }
+    }
+  ]
+}

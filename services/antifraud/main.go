@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/jaeger"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
@@ -25,8 +26,9 @@ import (
 )
 
 var (
-	logger *zap.Logger
-	tracer trace.Tracer
+	logger             *zap.Logger
+	tracer             trace.Tracer
+	asyncLagExtraDelay = 0 * time.Millisecond
 
 	// Métricas RED
 	messagesProcessed = promauto.NewCounterVec(
@@ -70,28 +72,67 @@ var (
 			Buckets: []float64{0, 20, 40, 60, 80, 100},
 		},
 	)
+
+	antifraudScenarioEnabled = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "antifraud_scenario_enabled",
+			Help: "Whether an antifraud teaching scenario is enabled",
+		},
+		[]string{"scenario"},
+	)
 )
 
+func setAsyncLagScenario(enabled bool) {
+	if enabled {
+		antifraudScenarioEnabled.WithLabelValues("async_lag").Set(1)
+		return
+	}
+	antifraudScenarioEnabled.WithLabelValues("async_lag").Set(0)
+}
+
 func initTracing() {
-	jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT")
-
-	if jaegerEndpoint == "" {
-		return
+	ctx := context.Background()
+	serviceName := os.Getenv("OTEL_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "antifraud-service"
 	}
 
-	// Jaeger exporter usando collector HTTP endpoint
-	// Formato esperado: http://jaeger:14268/api/traces
-	collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
-	exporter, err := jaeger.New(
-		jaeger.WithCollectorEndpoint(
-			jaeger.WithEndpoint(collectorURL),
-		),
+	var (
+		exporter tracesdk.SpanExporter
+		err      error
 	)
-	if err != nil {
-		logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+
+	otlpEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+	if otlpEndpoint == "" {
+		otlpEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	}
+
+	if otlpEndpoint != "" {
+		exporter, err = otlptracehttp.New(
+			ctx,
+			otlptracehttp.WithEndpointURL(otlpEndpoint),
+		)
+		if err != nil {
+			logger.Error("Failed to create OTLP exporter", zap.Error(err), zap.String("endpoint", otlpEndpoint))
+			return
+		}
+		logger.Info("Using OTLP for tracing", zap.String("endpoint", otlpEndpoint))
+	} else if jaegerEndpoint := os.Getenv("JAEGER_ENDPOINT"); jaegerEndpoint != "" {
+		collectorURL := fmt.Sprintf("http://%s/api/traces", jaegerEndpoint)
+		exporter, err = jaeger.New(
+			jaeger.WithCollectorEndpoint(
+				jaeger.WithEndpoint(collectorURL),
+			),
+		)
+		if err != nil {
+			logger.Error("Failed to create Jaeger exporter", zap.Error(err))
+			return
+		}
+		logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
+	} else {
+		logger.Warn("No tracing exporter configured, tracing disabled")
 		return
 	}
-	logger.Info("Using Jaeger for tracing", zap.String("endpoint", collectorURL))
 
 	// Sampling: 5% (menos crítico que payment)
 	sampler := tracesdk.TraceIDRatioBased(0.05)
@@ -100,7 +141,7 @@ func initTracing() {
 		tracesdk.WithBatcher(exporter),
 		tracesdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceName("antifraud-service"),
+			semconv.ServiceName(serviceName),
 		)),
 		tracesdk.WithSampler(sampler),
 	)
@@ -111,7 +152,7 @@ func initTracing() {
 		propagation.Baggage{},
 	))
 
-	tracer = otel.Tracer("antifraud-service")
+	tracer = otel.Tracer(serviceName)
 }
 
 func initLogger() {
@@ -179,6 +220,10 @@ func processPayment(ctx context.Context, msgBody []byte, headers amqp.Table) {
 	if rand.Float64() < 0.01 {
 		processingTime += 500 * time.Millisecond
 	}
+	if asyncLagExtraDelay > 0 {
+		processingTime += asyncLagExtraDelay
+		span.SetAttributes(attribute.Int64("scenario.async_lag_ms", asyncLagExtraDelay.Milliseconds()))
+	}
 	time.Sleep(processingTime)
 
 	// Calcular risk score
@@ -219,6 +264,35 @@ func processPayment(ctx context.Context, msgBody []byte, headers amqp.Table) {
 	)
 }
 
+func handleScenarioAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int64{
+			"asyncLagMs": asyncLagExtraDelay.Milliseconds(),
+		})
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var payload struct {
+		AsyncLagMs int `json:"asyncLagMs"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	asyncLagExtraDelay = time.Duration(payload.AsyncLagMs) * time.Millisecond
+	setAsyncLagScenario(asyncLagExtraDelay > 0)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 func main() {
 	initLogger()
 	defer logger.Sync()
@@ -230,7 +304,7 @@ func main() {
 		rabbitURL = "amqp://guest:guest@rabbitmq:5672/"
 	}
 
-	conn, err := amqp.Dial(rabbitURL)
+	conn, err := connectRabbitMQWithRetry(rabbitURL)
 	if err != nil {
 		logger.Fatal("failed_to_connect_rabbitmq", zap.Error(err))
 	}
@@ -259,6 +333,7 @@ func main() {
 	// Expor métricas
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
+		http.HandleFunc("/admin/scenarios", handleScenarioAdmin)
 		http.ListenAndServe(":8080", nil)
 	}()
 
@@ -271,4 +346,23 @@ func main() {
 		ctx, _ := extractTraceContext(msg.Headers)
 		processPayment(ctx, msg.Body, msg.Headers)
 	}
+}
+
+func connectRabbitMQWithRetry(rabbitURL string) (*amqp.Connection, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 30; attempt++ {
+		conn, err := amqp.Dial(rabbitURL)
+		if err == nil {
+			return conn, nil
+		}
+
+		lastErr = err
+		logger.Warn("failed_to_connect_rabbitmq_retrying",
+			zap.Int("attempt", attempt),
+			zap.Error(err),
+		)
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil, fmt.Errorf("rabbitmq unavailable after retries: %w", lastErr)
 }

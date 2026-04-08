@@ -1,127 +1,104 @@
-# Conceitos Fundamentais
+# Conceitos para a Aula
 
-[← Voltar ao README](../README.md)
+Este documento só mantém conceitos que ajudam a interpretar os incidentes do laboratório.
 
----
+## 1. O que muda em sistemas de fintech
 
-## 1. Escalabilidade: Três Dimensões
+Em fintech, latência não é só desconforto de UX. Ela impacta:
 
-**Definição:** Capacidade de um sistema manter SLOs aceitáveis sob aumento de carga, falha e mudança.
+- autorização no caminho crítico;
+- janelas de risco e antifraude;
+- reconciliação;
+- consistência percebida pelo cliente.
 
-### 1.1 Escala de Tráfego (mais requisições)
-- Adicionar mais instâncias do serviço
-- Load balancing
-- **Implementado**: Rate limiting e backpressure
+O sistema pode responder `201` e ainda assim estar operacionalmente degradado se o pós-processamento estiver atrasado.
 
-### 1.2 Escala de Estado (mais dados)
-- Particionamento (sharding)
-- Cache distribuído
-- Banco de dados escalável
-- **Desafio**: Estado compartilhado é difícil de escalar
+## 2. Escalabilidade de verdade
 
-### 1.3 Escala Organizacional (mais times e deploys)
-- Deploy independente por serviço
-- Baixo acoplamento
-- **Implementado**: Microsserviços independentes
+Escalar não é apenas subir mais réplicas.
 
-> **Frase-chave:** Escalar tráfego é fácil. Escalar estado e pessoas é difícil.
+O que normalmente limita uma fintech:
 
-## 2. Escala Vertical vs Horizontal
+- estado compartilhado;
+- round-trips excessivos em leituras críticas;
+- dependências síncronas demais;
+- burst de carga em chaves quentes;
+- filas que crescem mais rápido do que o consumo.
 
-**Escala Vertical (Scale Up):**
-- Aumenta CPU/memória do servidor
-- Simples, mas limitado pelo hardware
-- **Quando usar**: Carga previsível e estável
+## 3. O que observar primeiro
 
-**Escala Horizontal (Scale Out):**
-- Adiciona mais nós/servidores
-- Exige arquitetura stateless e idempotência
-- **Quando usar**: Carga variável, alta disponibilidade necessária
+Ordem recomendada de leitura:
 
-> **Mensagem:** Horizontal escala exige arquitetura. Vertical exige dinheiro.
+1. sintoma do cliente;
+2. latência p95/p99;
+3. taxa de erro e proteção ativada;
+4. span dominante;
+5. sinais de saturação ou backlog.
 
-## 3. Observabilidade: Três Sinais
+Essa ordem evita começar a investigação pela infraestrutura errada.
 
-**Observabilidade** lida com sinais, não com logs isolados.
+## 4. RED e USE
 
-### 3.1 Métricas Numéricas (Prometheus)
-- **Contadores**: Total de requisições, erros
-- **Gauges**: CPU, memória (valores atuais)
-- **Histogramas**: Distribuição de latência
+RED responde se o serviço está saudável para o usuário:
 
-### 3.2 Eventos Estruturados (Logs)
-- Logs em JSON com campos consistentes
-- Correlation ID e Trace ID
-- Campos semânticos de negócio
+- `Rate`
+- `Errors`
+- `Duration`
 
-### 3.3 Traces Correlacionados (Jaeger)
-- Árvore de spans conectados
-- Contexto propagado entre serviços
-- Identifica gargalos e dependências
+USE responde por que a degradação está acontecendo:
 
-## 4. Métricas RED vs USE
+- `Utilization`
+- `Saturation`
+- `Errors`
 
-**RED (Request/Error/Duration)** - Para Serviços:
-- **Rate**: Taxa de requisições por segundo
-- **Errors**: Taxa de erros
-- **Duration**: Latência das requisições
-- **Uso**: Entender experiência do usuário
+Na aula:
 
-**USE (Utilization/Saturation/Errors)** - Para Infra:
-- **Utilization**: Uso do recurso (0-100%)
-- **Saturation**: Quão "cheio" está o recurso
-- **Errors**: Erros do recurso
-- **Uso**: Entender causa dos problemas
+- `Payment Health` é a leitura RED;
+- `Scenario Signals` e traces ajudam a fechar a leitura USE.
 
-> **Mensagem:** RED mostra experiência. USE mostra causa.
+## 5. Cauda importa mais do que média
 
-## 5. Percentis e Latência de Cauda
+Se algumas transações sofrem 2 segundos extras por dependência externa, a média pode parecer aceitável e mesmo assim o fluxo estar ruim.
 
-**Por que não usar média?**
+Para o laboratório, priorize:
 
-**Exemplo:**
-- 99 requisições: 10ms cada
-- 1 requisição: 2000ms
-- **Média**: ~29ms (parece OK!)
-- **p99**: 2000ms (usuário sente lentidão extrema)
+- p95;
+- p99;
+- waterfall do trace.
 
-**Percentis importantes:**
-- **p50** (mediana): 50% das requisições são mais rápidas
-- **p90**: 90% das requisições são mais rápidas
-- **p95**: 95% das requisições são mais rápidas
-- **p99**: 99% das requisições são mais rápidas (cauda)
+## 6. Proteção não é cura
 
-> **Frase-chave:** Usuário não sente média. Sente cauda.
+Rate limit, breaker e timeout existem para conter dano.
 
-## 6. Backpressure e Controle de Carga
+Eles não resolvem:
 
-**Princípio:** Sistema precisa saber dizer "não"
+- `chatty_db`
+- `cache_stampede`
+- dependência externa lenta
 
-**Técnicas implementadas:**
-- **Rate Limiting**: Rejeita requisições além do limite (HTTP 429)
-- **Circuit Breaker**: Abre quando há muitas falhas
-- **Timeouts Agressivos**: Previne requisições "zombie"
+Eles apenas impedem que a degradação vire colapso total.
 
-> **Mensagem:** Rejeitar cedo é melhor que falhar tarde.
+## 7. Online e assíncrono têm SLOs diferentes
 
-## 7. SLO, SLA e Error Budget
+Em fintech madura, o endpoint de pagamento e o pós-processamento não compartilham o mesmo critério de saúde.
 
-**SLA (Service Level Agreement):**
-- Promessa externa com cliente
-- Exemplo: "99.9% uptime"
-- Consequência: Penalidade se violado
+Exemplo:
 
-**SLO (Service Level Objective):**
-- Objetivo interno da equipe (mais rigoroso que SLA)
-- Exemplo: "99.95% uptime" (para garantir 99.9% SLA)
+- online saudável: autorização em poucos centenas de ms;
+- assíncrono degradado: antifraude ou notificação com backlog crescente.
 
-**Error Budget:**
-- Quanto pode falhar: 100% - SLO
-- Exemplo: SLO 99.9% = 0.1% pode falhar
-- **Uso**: Decidir quando parar features e focar em estabilidade
+Por isso existe o cenário `async_lag`.
 
-> **Mensagem:** Sem budget, toda falha vira emergência.
+## 8. O que é uma boa hipótese operacional
 
----
+Hipótese útil é específica e testável.
 
-[← Voltar ao README](../README.md)
+Exemplos:
+
+- "o p99 subiu porque a dependência de risco está dominando o trace"
+- "o banco está absorvendo cache miss em massa em poucas contas quentes"
+- "o caminho síncrono está saudável, mas o consumidor assíncrono acumulou atraso"
+
+Hipótese ruim:
+
+- "o sistema ficou lento"

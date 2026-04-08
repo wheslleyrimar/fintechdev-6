@@ -1,171 +1,82 @@
-# Exemplos de SLO, SLA e Error Budget
+# SLOs para o Laboratório
 
-## Definições
+Este arquivo continua útil porque ajuda a fechar a aula com critério operacional, não só com incidente.
 
-### SLA (Service Level Agreement)
-**Promessa externa** - Contrato com cliente/usuário
+## SLOs sugeridos
 
-**Exemplo:**
-- "99.9% de disponibilidade"
-- "p99 latência < 500ms"
-- **Consequência**: Penalidade se violado
+### SLO 1: Caminho online de pagamento
 
-### SLO (Service Level Objective)
-**Objetivo interno** - Meta da equipe (mais rigoroso que SLA)
+- disponibilidade lógica: `POST /payments` com resposta protegida ou sucesso
+- alvo sugerido: `99.9%`
+- latência alvo:
+  - p95 < `400ms`
+  - p99 < `900ms`
 
-**Exemplo:**
-- SLA: 99.9% → SLO: 99.95% (margem de segurança)
-- SLA: p99 < 500ms → SLO: p99 < 400ms
+## SLO 2: Pós-processamento antifraude
 
-### Error Budget
-**Quanto pode falhar** - 100% - SLO
+- processamento assíncrono sem atraso excessivo
+- alvo sugerido:
+  - p95 do antifraude < `2s`
+  - throughput compatível com o volume publicado
 
-**Exemplo:**
-- SLO: 99.9% → Error Budget: 0.1%
-- Em um mês (2,592,000 segundos): 0.1% = 2,592 segundos = 43.2 minutos
+## Sinais no Datadog
 
-## Exemplos Práticos
+Para o online:
 
-### Exemplo 1: Disponibilidade
+- `fintechdev.http_request_duration_percentiles`
+- `fintechdev.http_requests_total`
+- `fintechdev.rate_limit_rejected_total`
+- `fintechdev.circuit_breaker_state`
 
-**SLA:** 99.9% uptime
-**SLO:** 99.95% uptime (margem de segurança)
-**Error Budget:** 0.05% = 21.6 minutos/mês
+Para o assíncrono:
 
-**Cálculo no Prometheus:**
-```promql
-# Disponibilidade (últimas 24h)
-avg_over_time(up[24h])
+- `fintechdev.antifraud_processing_duration_percentiles`
+- `fintechdev.antifraud_messages_processed_total`
+- `fintechdev.antifraud_scenario_enabled`
 
-# Error Budget consumido
-1 - avg_over_time(up[24h])
-```
+Para a carga:
 
-**Se error budget esgota:**
-- Parar deploy de features
-- Focar em estabilidade
-- Não fazer mudanças arriscadas
+- `k6.http_req_duration`
+- `k6.http_req_failed`
+- `k6.iterations`
 
-### Exemplo 2: Latência
+## Monitores que valem para a aula
 
-**SLA:** p99 < 500ms
-**SLO:** p99 < 400ms (margem de segurança)
-**Error Budget:** 1% das requisições podem ter latência > 400ms
+### Monitor 1: p95 do payment-service
 
-**Cálculo no Prometheus:**
-```promql
-# p99 latência
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
+Condição:
 
-# Requisições acima do SLO
-rate(http_request_duration_seconds_bucket{le="0.4"}[5m]) / rate(http_request_duration_seconds_count[5m])
-```
+- p95 sustentado acima do objetivo do online
 
-**Se error budget esgota:**
-- Otimizar queries lentas
-- Adicionar cache
-- Escalar horizontalmente
+Leitura:
 
-### Exemplo 3: Taxa de Erro
+- indica degradação antes de colapso total;
+- útil para `chatty_db` e `cache_stampede`.
 
-**SLA:** Taxa de erro < 0.1%
-**SLO:** Taxa de erro < 0.05%
-**Error Budget:** 0.05% das requisições podem falhar
+### Monitor 2: erro protegido ou falha real
 
-**Cálculo no Prometheus:**
-```promql
-# Taxa de erro
-rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])
+Condição:
 
-# Error budget consumido
-(rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) - 0.0005
-```
+- aumento de `rate_limit_rejected_total` ou respostas de falha
 
-## Alertas Baseados em SLO
+Leitura:
 
-### Alerta: SLO Violation
+- separa proteção ativa de indisponibilidade silenciosa.
 
-```yaml
-groups:
-  - name: slo_violations
-    rules:
-      - alert: AvailabilitySLOViolation
-        expr: avg_over_time(up[1h]) < 0.9995
-        for: 5m
-        annotations:
-          summary: "Availability SLO violated"
-          description: "Availability is {{ $value }} (SLO: 99.95%)"
-          runbook: "https://wiki/runbooks/availability"
-      
-      - alert: LatencySLOViolation
-        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 0.4
-        for: 5m
-        annotations:
-          summary: "Latency SLO violated"
-          description: "p99 latency is {{ $value }}s (SLO: 0.4s)"
-          runbook: "https://wiki/runbooks/latency"
-      
-      - alert: ErrorRateSLOViolation
-        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.0005
-        for: 5m
-        annotations:
-          summary: "Error rate SLO violated"
-          description: "Error rate is {{ $value }} (SLO: 0.05%)"
-          runbook: "https://wiki/runbooks/errors"
-```
+### Monitor 3: antifraude degradado
 
-## Error Budget Burn Rate
+Condição:
 
-### Cálculo de Burn Rate
+- p95 assíncrono alto com throughput menor do que o esperado
 
-**Burn Rate:** Quão rápido o error budget está sendo consumido
+Leitura:
 
-```promql
-# Burn rate de disponibilidade
-(1 - avg_over_time(up[1h])) / 0.0005  # 0.05% é o error budget
+- mostra sistema online aparentemente saudável, mas operação degradada.
 
-# Se burn rate > 1, está consumindo mais rápido que o permitido
-```
+## Burn rate na prática
 
-### Ações Baseadas em Burn Rate
+O laboratório não precisa de cálculo completo de burn rate para a demo, mas a mensagem final deve ser:
 
-- **Burn Rate < 1**: Pode fazer deploys normalmente
-- **Burn Rate 1-2**: Cuidado, reduzir frequência de deploys
-- **Burn Rate > 2**: Parar deploys, focar em estabilidade
-
-## Exemplo de Dashboard SLO
-
-**Métricas para monitorar:**
-1. Disponibilidade atual vs SLO
-2. Latência p99 atual vs SLO
-3. Taxa de erro atual vs SLO
-4. Error budget restante
-5. Burn rate
-
-**Grafana Queries:**
-```promql
-# Disponibilidade
-avg_over_time(up[24h])
-
-# Latência p99
-histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))
-
-# Taxa de erro
-rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])
-
-# Error budget restante (disponibilidade)
-(0.0005 - (1 - avg_over_time(up[24h]))) / 0.0005) * 100
-
-# Error budget restante (latência)
-# Requisições abaixo do SLO / Total
-rate(http_request_duration_seconds_bucket{le="0.4"}[5m]) / rate(http_request_duration_seconds_count[5m]) * 100
-```
-
-## Mensagem Final
-
-> **Sem budget, toda falha vira emergência.**
-
-Com error budget definido:
-- Equipe sabe quando parar features
-- Foco em estabilidade quando necessário
-- Decisões baseadas em dados, não em pânico
+- erro ou latência sustentada consome budget;
+- quando o budget é queimado rápido, feature para e estabilidade vira prioridade;
+- observabilidade boa não serve só para explicar falha passada, serve para governar mudança.

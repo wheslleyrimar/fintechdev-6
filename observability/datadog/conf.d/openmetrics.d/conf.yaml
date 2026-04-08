@@ -1,0 +1,47 @@
+init_config:
+
+instances:
+  - openmetrics_endpoint: http://payment-service:8080/metrics
+    namespace: fintechdev
+    metrics:
+      - http_requests
+      - http_request_duration_seconds
+      - http_request_duration_percentiles
+      - rate_limit_rejected
+      - circuit_breaker_state
+      - payments_processed
+      - payment_amount
+      - scenario_enabled
+      - intentional_lag_enabled
+      - intentional_lag_database_duration_seconds
+      - intentional_lag_cache_duration_seconds
+      - intentional_lag_external_duration_seconds
+      - intentional_lag_database_duration_seconds_observed
+      - intentional_lag_cache_duration_seconds_observed
+      - intentional_lag_external_duration_seconds_observed
+    tags:
+      - service:payment-service
+      - env:dev
+
+  - openmetrics_endpoint: http://antifraud-service:8080/metrics
+    namespace: fintechdev
+    metrics:
+      - antifraud_messages_processed
+      - antifraud_processing_duration_seconds
+      - antifraud_processing_duration_percentiles
+      - antifraud_fraud_detected
+      - antifraud_risk_score
+      - antifraud_scenario_enabled
+    tags:
+      - service:antifraud-service
+      - env:dev
+
+  - openmetrics_endpoint: http://notification-service:8080/metrics
+    namespace: fintechdev
+    metrics:
+      - notifications_sent
+      - notification_duration_seconds
+      - notification_errors
+    tags:
+      - service:notification-service
+      - env:dev
