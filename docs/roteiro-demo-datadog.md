@@ -46,7 +46,21 @@ Ele:
 - representa a autorização do pagamento;
 - aplica proteções como `rate limit` e `circuit breaker`;
 - simula interação com cache, banco e dependência externa de risco;
-- publica um evento no `RabbitMQ` para processamento posterior.
+- publica no `RabbitMQ` o evento de domínio `PaymentCreated` no exchange `payments` (fanout).
+
+Detalhe importante do evento publicado:
+
+- nome do evento: `PaymentCreated`;
+- exchange: `payments` (`fanout`, broadcast para múltiplos consumidores);
+- campos principais no payload: `paymentId`, `accountId`, `amount`, `currency`, `correlationId`, `traceId`, `ts`;
+- headers de correlação: `X-Correlation-ID` e `X-Trace-ID`.
+
+Por que publicar esse evento:
+
+- para não bloquear a resposta online com tarefas que podem ser assíncronas;
+- para permitir que antifraude e notificações evoluam de forma desacoplada;
+- para manter rastreabilidade ponta a ponta via `correlationId`/`traceId`;
+- para demonstrar o trade-off clássico: resposta rápida no online vs. risco de backlog no assíncrono.
 
 O que isso significa na linguagem de fintech:
 
@@ -60,9 +74,17 @@ Este serviço representa o pós-processamento assíncrono de risco.
 
 Ele:
 
-- consome eventos publicados pelo `payment-service`;
+- consome mensagens do exchange `payments` (evento `PaymentCreated`);
 - simula enriquecimento ou verificação posterior de risco;
+- calcula um `risk_score` e marca uma fração das transações como fraude;
 - permite injetar atraso assíncrono.
+
+Na prática do código:
+
+- lê `paymentId` e `amount` do evento;
+- processa com latência variável (incluindo cauda);
+- pode adicionar atraso extra no cenário `async_lag`;
+- emite métricas como `antifraud_messages_processed` e `antifraud_processing_duration`.
 
 O que isso significa na linguagem de fintech:
 
@@ -76,8 +98,9 @@ Este serviço representa o envio de notificações.
 
 Ele:
 
-- consome eventos do RabbitMQ;
-- simula a parte operacional de avisar o cliente.
+- consome o mesmo evento `PaymentCreated` no RabbitMQ;
+- simula envio de notificações em múltiplos canais (`email`, `sms`, `push`, `webhook`);
+- executa os envios em paralelo para representar trabalho operacional pós-pagamento.
 
 Na aula ele é menos central, mas ajuda a reforçar a ideia de ecossistema:
 
@@ -92,6 +115,12 @@ Na aula, a mensagem principal é:
 
 - nem tudo que importa para a operação precisa acontecer antes do `201`;
 - filas ajudam desacoplamento, mas também criam risco de backlog.
+
+Como isso está modelado aqui:
+
+- o `payment-service` publica no exchange `payments` (fanout);
+- `antifraud-service` e `notification-service` criam seus próprios consumidores;
+- o mesmo evento dispara múltiplos fluxos sem acoplamento direto entre serviços.
 
 ### `datadog-agent`
 
@@ -288,6 +317,19 @@ Exemplo simples:
 - `Rate`: volume de requisições por segundo.
 - `Errors`: proporção de respostas com erro (por exemplo `5xx`, `429`).
 - `Duration`: tempo de resposta (idealmente olhando percentis).
+
+Como interpretar RED rapidamente:
+
+- `Rate` sobe + `Duration` sobe: provável saturação ou gargalo;
+- `Duration` sobe sem `Errors` subir: degradação silenciosa (cliente sofre mesmo com `201`);
+- `Errors` sobem com `429`: proteção (`rate limit`) atuando;
+- `Errors` sobem com `5xx`: falha real no serviço ou dependência.
+
+Mapeamento prático no dashboard `Payment Health`:
+
+- `Rate` -> widget `HTTP Requests`;
+- `Errors` -> widget `Rate Limited` (complementar com status HTTP e logs/APM);
+- `Duration` -> widgets `HTTP Duration p95` e `HTTP Duration p99`.
 
 ### SLO (Service Level Objective)
 
